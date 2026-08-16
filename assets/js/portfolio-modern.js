@@ -6,6 +6,7 @@
   const navigation = doc.querySelector('#site-nav');
   const revealItems = [...doc.querySelectorAll('[data-reveal]')];
   const glowItems = [...doc.querySelectorAll('[data-glow]')];
+  const ambientMotionItems = [...doc.querySelectorAll('.hero-visual, .marquee, .radio-card')];
   const year = doc.querySelector('#current-year');
   const radio = doc.querySelector('#portfolio-radio');
   const radioCard = doc.querySelector('.radio-card');
@@ -72,6 +73,11 @@
     ['0%', '100%'], ['50%', '100%'], ['100%', '100%']
   ];
   let activeBuildFrame = -1;
+  let buildFrameAnimationRequest = 0;
+  let buildStoryTop = 0;
+  let buildStoryBottom = 0;
+  let buildStepCenters = [];
+  let scrollableHeight = 1;
 
   const setBuildFrame = (index) => {
     if (!buildFrame || !buildFrameImage || index === activeBuildFrame || !buildSteps[index]) return;
@@ -89,30 +95,43 @@
 
     buildSteps.forEach((item, itemIndex) => item.classList.toggle('is-active', itemIndex === index));
     buildFrame.classList.remove('is-switching');
-    void buildFrame.offsetWidth;
-    buildFrame.classList.add('is-switching');
+    window.cancelAnimationFrame(buildFrameAnimationRequest);
+    buildFrameAnimationRequest = window.requestAnimationFrame(() => buildFrame.classList.add('is-switching'));
+  };
+
+  const refreshLayoutMetrics = () => {
+    const scrollTop = window.scrollY || doc.documentElement.scrollTop;
+    scrollableHeight = Math.max(1, doc.documentElement.scrollHeight - window.innerHeight);
+
+    if (!buildStory || !buildSteps.length) return;
+    const storyBounds = buildStory.getBoundingClientRect();
+    buildStoryTop = storyBounds.top + scrollTop;
+    buildStoryBottom = storyBounds.bottom + scrollTop;
+    buildStepCenters = buildSteps.map((step) => {
+      const bounds = step.getBoundingClientRect();
+      return bounds.top + scrollTop + bounds.height * 0.5;
+    });
   };
 
   const updateBuildStory = () => {
-    if (!buildStory || !buildSteps.length) return;
+    if (!buildStory || !buildSteps.length || !buildStepCenters.length) return;
 
-    const storyBounds = buildStory.getBoundingClientRect();
-    if (storyBounds.top > window.innerHeight) {
+    const scrollTop = window.scrollY || doc.documentElement.scrollTop;
+    if (buildStoryTop > scrollTop + window.innerHeight) {
       setBuildFrame(0);
       return;
     }
-    if (storyBounds.bottom < 0) {
+    if (buildStoryBottom < scrollTop) {
       setBuildFrame(buildSteps.length - 1);
       return;
     }
 
-    const viewportFocus = window.innerHeight * 0.55;
+    const viewportFocus = scrollTop + window.innerHeight * 0.55;
     let closestIndex = 0;
     let closestDistance = Number.POSITIVE_INFINITY;
 
-    buildSteps.forEach((step, index) => {
-      const bounds = step.getBoundingClientRect();
-      const distance = Math.abs((bounds.top + bounds.height * 0.5) - viewportFocus);
+    buildStepCenters.forEach((stepCenter, index) => {
+      const distance = Math.abs(stepCenter - viewportFocus);
       if (distance < closestDistance) {
         closestDistance = distance;
         closestIndex = index;
@@ -123,6 +142,7 @@
   };
 
   setBuildFrame(0);
+  refreshLayoutMetrics();
 
   const closeMenu = () => {
     if (!menuButton || !navigation) return;
@@ -147,16 +167,34 @@
 
   const updateScrollState = () => {
     const scrollTop = window.scrollY || doc.documentElement.scrollTop;
-    const scrollable = doc.documentElement.scrollHeight - window.innerHeight;
-    const progress = scrollable > 0 ? Math.min(100, (scrollTop / scrollable) * 100) : 0;
+    const progress = Math.min(100, (scrollTop / scrollableHeight) * 100);
     doc.documentElement.style.setProperty('--scroll-progress', progress.toFixed(2));
     header?.classList.toggle('is-scrolled', scrollTop > 18);
     updateBuildStory();
   };
 
+  let scrollUpdateRequest = 0;
+  let resizeUpdateRequest = 0;
+  const requestScrollUpdate = () => {
+    if (scrollUpdateRequest) return;
+    scrollUpdateRequest = window.requestAnimationFrame(() => {
+      scrollUpdateRequest = 0;
+      updateScrollState();
+    });
+  };
+
+  const refreshAndUpdate = () => {
+    refreshLayoutMetrics();
+    requestScrollUpdate();
+  };
+
   updateScrollState();
-  window.addEventListener('scroll', updateScrollState, { passive: true });
-  window.addEventListener('resize', updateBuildStory);
+  window.addEventListener('scroll', requestScrollUpdate, { passive: true });
+  window.addEventListener('resize', () => {
+    window.cancelAnimationFrame(resizeUpdateRequest);
+    resizeUpdateRequest = window.requestAnimationFrame(refreshAndUpdate);
+  });
+  window.addEventListener('load', refreshAndUpdate, { once: true });
 
   if ('IntersectionObserver' in window) {
     const observer = new IntersectionObserver((entries, currentObserver) => {
@@ -173,6 +211,16 @@
     });
   } else {
     revealItems.forEach((item) => item.classList.add('is-visible'));
+  }
+
+  if ('IntersectionObserver' in window) {
+    const ambientMotionObserver = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => entry.target.classList.toggle('is-in-view', entry.isIntersecting));
+    }, { threshold: 0, rootMargin: '120px 0px' });
+
+    ambientMotionItems.forEach((item) => ambientMotionObserver.observe(item));
+  } else {
+    ambientMotionItems.forEach((item) => item.classList.add('is-in-view'));
   }
 
   if (window.matchMedia('(hover: hover) and (pointer: fine)').matches) {
